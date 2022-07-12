@@ -1,8 +1,9 @@
 import telebot
 import markups as m
 from Settings import TOKEN
-import Meeting_room as mr
 import Login as lg
+import psycopg2
+from psycopg2 import Error
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -26,7 +27,53 @@ def bot_message(message):
         bot.send_message(message.chat.id, 'В разработке')
 
 def reserveroomcity(message):
-    bot.send_message(message.chat.id, message.text)
+    try:
+        connection = psycopg2.connect(user='postgres',password='2Dota2ru',host='127.0.0.1',port='5432',database='ReserveBotBD')
+        # Курсор для выполнения операций с БД
+        cursor = connection.cursor()
+
+        # Выводим все доступные варианты переговорных в данном городе. Визуал будет изменен в дальнейшем.
+        # cursor.execute(f'SELECT city,adress,room_number FROM meeting_room WHERE city={call.data}')
+        cursor.execute(f"SELECT * FROM Meeting_room where city = '{message.text}'")
+
+        room = cursor.fetchall()
+        print(room)
+        # Т.к. телеграм боту нужна строка, то в данной функции мы проходим по кортежку и переводим данные в строку для вывода боту
+        text = '\n\n'.join([','.join(map(str, x)) for x in room])
+        msgtextcity = bot.send_message(message.chat.id, str(text))  # вывод сообщения боту.
+        bot.register_next_step_handler(msgtextcity, startreserveroom)
+
+        # В случае ошибки с PostgreSQL и закрытие
+    except(Exception, Error) as error:
+        print("Ошибка при работе с PostgreSQL", error)
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
+
+def startreserveroom(message):
+    msgid = message.text
+    if msgid.isdigit() == True:
+        msgid = int(msgid)
+        connection = psycopg2.connect(user='postgres', password='2Dota2ru', host='127.0.0.1', port='5432', database='ReserveBotBD')
+        # Курсор для выполнения операций с БД
+        cursor = connection.cursor()
+
+        cursor.execute(f"SELECT meeting_room_id FROM Meeting_room where meeting_room_id = '{msgid}'")
+
+        roomid = cursor.fetchall()
+        text = '\n\n'.join([','.join(map(str, x)) for x in roomid])
+        cursor.execute(f"SELECT * FROM reservedroom where meetingroomid = '{str(text)}'")
+
+        roominfo = cursor.fetchall()
+        textroom = '\n\n'.join([','.join(map(str, x)) for x in roominfo])
+        bot.send_message(message.chat.id, textroom)
+
+
+    else:
+        #'Ошибка, введите число'
+        msgerror = bot.send_message(message.chat.id, 'Введите id комнаты')
+        bot.register_next_step_handler(msgerror, startreserveroom)
 
 # запросы от бота на сервера телеграма на проверку новых сообщений
 bot.infinity_polling(timeout=3)
