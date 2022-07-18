@@ -4,6 +4,8 @@ from Settings import TOKEN
 import Login as lg
 import psycopg2
 from psycopg2 import Error
+import time
+import re
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -40,8 +42,9 @@ def reserveroomcity(message):
         print(room)
         # Т.к. телеграм боту нужна строка, то в данной функции мы проходим по кортежку и переводим данные в строку для вывода боту
         text = '\n\n'.join([','.join(map(str, x)) for x in room])
+        text = text + '\n\n Введите интересующую дату в формате Yyyy-mm-dd'
         msgtextcity = bot.send_message(message.chat.id, str(text))  # вывод сообщения боту.
-        bot.register_next_step_handler(msgtextcity, startreserveroom)
+        bot.register_next_step_handler(msgtextcity, selectdate)
 
         # В случае ошибки с PostgreSQL и закрытие
     except(Exception, Error) as error:
@@ -51,8 +54,22 @@ def reserveroomcity(message):
             cursor.close()
             connection.close()
 
+def selectdate(message):
+    global date
+    date = message.text
+    try:
+        valid_date = time.strptime(date, '%Y-%m-%d')
+        msg = bot.send_message(message.chat.id,'Введите интересующую переговорную')
+        bot.register_next_step_handler(msg, startreserveroom)
+    except ValueError:
+        msgerror = bot.send_message(message.chat.id, 'Введите дату!')
+        bot.register_next_step_handler(msgerror, selectdate)
+
+
 def startreserveroom(message):
+    global roomnumber
     msgid = message.text
+    roomnumber = msgid
     if msgid.isdigit() == True:
         msgid = int(msgid)
         connection = psycopg2.connect(user='postgres', password='2Dota2ru', host='127.0.0.1', port='5432', database='ReserveBotBD')
@@ -63,17 +80,62 @@ def startreserveroom(message):
 
         roomid = cursor.fetchall()
         text = '\n\n'.join([','.join(map(str, x)) for x in roomid])
-        cursor.execute(f"SELECT * FROM reservedroom where meetingroomid = '{str(text)}'")
+        cursor.execute(f"SELECT * FROM reservedroom where meetingroomid = '{str(text)}' AND meetingday = '{date}'")
 
         roominfo = cursor.fetchall()
-        textroom = '\n\n'.join([','.join(map(str, x)) for x in roominfo])
-        bot.send_message(message.chat.id, textroom)
 
-
+        if roominfo != []:
+            textroom = '\n\n'.join([','.join(map(str, x)) for x in roominfo])
+            bot.send_message(message.chat.id, textroom)
+        else:
+            freeroom = 'Все время в переговорной свободно, выберите начало времени бронирования'
+            msg = bot.send_message(message.chat.id, freeroom)
+            bot.register_next_step_handler(msg, selectstarttime)
     else:
         #'Ошибка, введите число'
         msgerror = bot.send_message(message.chat.id, 'Введите id комнаты')
         bot.register_next_step_handler(msgerror, startreserveroom)
+
+def selectstarttime(message):
+    global date_start
+    msgtext = message.text
+    date_start = msgtext
+    match = re.fullmatch(r'\d\d:\d\d', rf'{msgtext}')
+    if match:
+        msg = bot.send_message(message.chat.id, 'Введите время окончания бронирования')
+        bot.register_next_step_handler(msg, selectlasttime)
+    else:
+        msg = bot.send_message(message.chat.id, 'Введите время')
+        bot.register_next_step_handler(msg, selectstarttime)
+
+def selectlasttime(message):
+    global date_end
+    msgtext = message.text
+    date_end = msgtext
+    match = re.fullmatch(r'\d\d:\d\d', rf'{msgtext}')
+    if match:
+        msg = bot.send_message(message.chat.id, 'Точно забронировать на это время?')
+        bot.register_next_step_handler(msg, createdbdata)
+    else:
+        msg = bot.send_message(message.chat.id, 'Введите время')
+        bot.register_next_step_handler(msg, selectstarttime)
+
+def createdbdata(message):
+    userid = message.chat.id
+    if message.text == 'Да':
+        connection = psycopg2.connect(user='postgres', password='2Dota2ru', host='127.0.0.1', port='5432',
+                                      database='ReserveBotBD')
+        # Курсор для выполнения операций с БД
+        cursor = connection.cursor()
+
+        cursor.execute(f"INSERT INTO reservedroom VALUES ({userid},{roomnumber}, '{date}', '{date_start}', '{date_end}') ")
+        cursor.execute(f"SELECT * FROM reservedroom WHERE telegramidemployer = {userid} and meetingroomid = {roomnumber} and meetingday = '{date}' and timestart = '{date_start}' and timeend = '{date_end}'")
+        result = cursor.fetchall()
+
+        if result != []:
+            bot.send_message(message.chat.id, f'Бронирование прошло успешно на {date} {date_start} - {date_end}')
+        else:
+            bot.send_message('Произошла ошибка, попробуйте еще раз')
 
 # запросы от бота на сервера телеграма на проверку новых сообщений
 bot.infinity_polling(timeout=3)
